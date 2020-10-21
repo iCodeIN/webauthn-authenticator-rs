@@ -2,16 +2,28 @@
 use crate::error::WebauthnCError;
 
 use webauthn_rs::proto::{CreationChallengeResponse, RegisterPublicKeyCredential,
-    RequestChallengeResponse, PublicKeyCredential, CollectedClientData};
+    RequestChallengeResponse, PublicKeyCredential, CollectedClientData,
+    AuthenticatorAttachment, UserVerificationPolicy
+    };
 use webauthn_rs::crypto::compute_sha256;
 use url::Url;
+use std::sync::mpsc::channel;
+use std::thread;
 
-use authenticator::{AuthenticatorService,
+use authenticator::{authenticatorservice::AuthenticatorService,
     RegisterFlags,
+    statecallback::StateCallback,
+    StatusUpdate,
+
+    };
+
+/*
+use authenticator::{
     REQUIRE_RESIDENT_KEY,
     REQUIRE_USER_VERIFICATION,
     REQUIRE_PLATFORM_ATTACHMENT,
 };
+*/
 
 pub mod error;
 
@@ -24,13 +36,13 @@ impl WebauthnAuthenticator {
         }
     }
 
-    fn authenticator_make_credential(&self) -> {
+    // fn authenticator_make_credential(&self) -> {
         //          Invoke the authenticatorMakeCredential operation on authenticator with clientDataHash, options.rp, options.user, options.authenticatorSelection.requireResidentKey, userPresence, userVerification, credTypesAndPubKeyAlgs, excludeCredentialDescriptorList, and authenticatorExtensions as parameters.
-    }
+    // }
 
     fn perform_authenticator_u2f(&self,
         // This is rp.id
-        appid: Vec<u8>,
+        appid: &str,
         // This is client_data_json_hash
         chal_bytes: Vec<u8>,
         // timeout from options
@@ -46,7 +58,7 @@ impl WebauthnAuthenticator {
             return Err(WebauthnCError::NotSupported);
         }
 
-        let manager = AuthenticatorService::new()
+        let mut manager = AuthenticatorService::new()
             .map_err(|e| {
                 log::error!("Authentication Service -> {:?}", e);
                 WebauthnCError::PlatformAuthenticator
@@ -57,12 +69,14 @@ impl WebauthnAuthenticator {
         let mut flags = RegisterFlags::empty();
 
         if platform_attached {
-            flags.insert(REQUIRE_PLATFORM_ATTACHMENT)
+            flags.insert(RegisterFlags::REQUIRE_PLATFORM_ATTACHMENT)
         }
 
         if resident_key {
-            flags.insert(REQUIRE_RESIDENT_KEY)
+            flags.insert(RegisterFlags::REQUIRE_RESIDENT_KEY)
         }
+
+        let app_bytes = compute_sha256(appid.as_bytes());
 
         let (status_tx, status_rx) = channel::<StatusUpdate>();
         let (register_tx, register_rx) = channel();
@@ -85,7 +99,7 @@ impl WebauthnAuthenticator {
             }
         });
 
-        callback = StateCallback::new(Box::new(move |rv| {
+        let callback = StateCallback::new(Box::new(move |rv| {
             register_tx.send(rv).unwrap();
         }));
 
@@ -103,9 +117,18 @@ impl WebauthnAuthenticator {
             .map_err(|e| {
                 log::error!("Registration Channel Error -> {:?}", e);
                 WebauthnCError::Internal
-            })?;
+            })
+            ?;
 
-        log::debug!("{:?}", register_result);
+        let (register_data, device_info) = register_result
+            .map_err(|e| {
+                log::error!("Device Registration Error -> {:?}", e);
+                WebauthnCError::Internal
+            })
+            ?;
+
+        log::debug!("rd -> {:?}", register_data);
+        log::debug!("di -> {:?}", device_info);
 
         Ok(())
     }
@@ -324,25 +347,25 @@ impl WebauthnAuthenticator {
         // As a result this really limits our usage to certain device classes. This is why we implement
         // this section in a seperate function call.
 
-        let (platform_attached, resident_key, user_verification) = match options.authenticator_selection {
+        let (platform_attached, resident_key, user_verification) = match &options.authenticator_selection {
             Some(auth_sel) => {
 
-                let pa = if auth_sel.as_ref().map(|v| {
-                    v == AuthenticatorAttachment::Platform
+                let pa = auth_sel.authenticator_attachment.as_ref().map(|v| {
+                    v == &AuthenticatorAttachment::Platform
                 })
                 .unwrap_or(false);
-                let uv = auth_sel.user_verification == UserVerificationPolicy::Required;
+                let uv = &auth_sel.user_verification == &UserVerificationPolicy::Required;
                 (pa, auth_sel.require_resident_key, uv)
             }
             None => {
                 (false, false, false)
             }
-        }
+        };
 
         let r = self.perform_authenticator_u2f(
-            options.rp.id,
+            &options.rp.id,
             client_data_json_hash.clone(),
-            timeout,
+            timeout.into(),
             platform_attached,
             resident_key,
             user_verification,
