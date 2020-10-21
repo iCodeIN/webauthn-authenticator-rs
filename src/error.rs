@@ -4,4 +4,6 @@ pub enum WebauthnCError {
     Unknown,
     Security,
     NotSupported,
+    PlatformAuthenticator,
+    Internal
 }

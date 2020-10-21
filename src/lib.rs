@@ -6,6 +6,13 @@ use webauthn_rs::proto::{CreationChallengeResponse, RegisterPublicKeyCredential,
 use webauthn_rs::crypto::compute_sha256;
 use url::Url;
 
+use authenticator::{AuthenticatorService,
+    RegisterFlags,
+    REQUIRE_RESIDENT_KEY,
+    REQUIRE_USER_VERIFICATION,
+    REQUIRE_PLATFORM_ATTACHMENT,
+};
+
 pub mod error;
 
 pub struct WebauthnAuthenticator {
@@ -15,6 +22,92 @@ impl WebauthnAuthenticator {
     pub fn new() -> Self {
         WebauthnAuthenticator {
         }
+    }
+
+    fn authenticator_make_credential(&self) -> {
+        //          Invoke the authenticatorMakeCredential operation on authenticator with clientDataHash, options.rp, options.user, options.authenticatorSelection.requireResidentKey, userPresence, userVerification, credTypesAndPubKeyAlgs, excludeCredentialDescriptorList, and authenticatorExtensions as parameters.
+    }
+
+    fn perform_authenticator_u2f(&self,
+        // This is rp.id
+        appid: Vec<u8>,
+        // This is client_data_json_hash
+        chal_bytes: Vec<u8>,
+        // timeout from options
+        timeout_ms: u64,
+        // 
+        platform_attached: bool,
+        resident_key: bool,
+        user_verification: bool,
+    ) -> Result<(), WebauthnCError> {
+
+        if user_verification {
+            log::error!("User Verification not supported by attestation-rs");
+            return Err(WebauthnCError::NotSupported);
+        }
+
+        let manager = AuthenticatorService::new()
+            .map_err(|e| {
+                log::error!("Authentication Service -> {:?}", e);
+                WebauthnCError::PlatformAuthenticator
+            })?;
+
+        manager.add_u2f_usb_hid_platform_transports();
+
+        let mut flags = RegisterFlags::empty();
+
+        if platform_attached {
+            flags.insert(REQUIRE_PLATFORM_ATTACHMENT)
+        }
+
+        if resident_key {
+            flags.insert(REQUIRE_RESIDENT_KEY)
+        }
+
+        let (status_tx, status_rx) = channel::<StatusUpdate>();
+        let (register_tx, register_rx) = channel();
+
+        thread::spawn(move || loop {
+            match status_rx.recv() {
+                Ok(StatusUpdate::DeviceAvailable { dev_info }) => {
+                    log::info!("STATUS: device available: {}", dev_info)
+                }
+                Ok(StatusUpdate::DeviceUnavailable { dev_info }) => {
+                    log::error!("STATUS: device unavailable: {}", dev_info)
+                }
+                Ok(StatusUpdate::Success { dev_info }) => {
+                    log::info!("STATUS: success using device: {}", dev_info);
+                }
+                Err(RecvError) => {
+                    log::debug!("STATUS: end");
+                    return;
+                }
+            }
+        });
+
+        callback = StateCallback::new(Box::new(move |rv| {
+            register_tx.send(rv).unwrap();
+        }));
+
+        manager.register(
+            flags,
+            timeout_ms,
+            chal_bytes,
+            app_bytes,
+            vec![],
+            status_tx.clone(),
+            callback
+        );
+
+        let register_result = register_rx.recv()
+            .map_err(|e| {
+                log::error!("Registration Channel Error -> {:?}", e);
+                WebauthnCError::Internal
+            })?;
+
+        log::debug!("{:?}", register_result);
+
+        Ok(())
     }
 
     /// 5.1.3. Create a New Credential - PublicKeyCredential’s [[Create]](origin, options, sameOriginWithAncestors) Method
@@ -56,7 +149,7 @@ impl WebauthnAuthenticator {
         // Let effectiveDomain be the callerOrigin’s effective domain. If effective domain is not a valid domain, then return a DOMException whose name is "Security" and terminate this algorithm.
         let caller_origin = Url::parse(origin)
             .map_err(|pe| {
-                log::debug!("url parse failure -> {:?}", pe);
+                log::error!("url parse failure -> {:?}", pe);
                 WebauthnCError::Security
             })?
         ;
@@ -67,7 +160,7 @@ impl WebauthnAuthenticator {
             // .or_else(|| caller_origin.host_str())
             .ok_or(WebauthnCError::Security)
             .map_err(|e| {
-                log::debug!("origin has no domain or host_str");
+                log::error!("origin has no domain or host_str");
                 e
             })?;
 
@@ -80,13 +173,13 @@ impl WebauthnAuthenticator {
         //          Set options.rp.id to effectiveDomain.
 
         if !effective_domain.ends_with(&options.rp.id) {
-            log::debug!("relying party id domain is not suffix of effective domain.");
+            log::error!("relying party id domain is not suffix of effective domain.");
             return Err(WebauthnCError::Security);
         }
 
         // Check origin is https:// if effectiveDomain != localhost.
         if !(effective_domain == "localhost" || caller_origin.scheme() == "https") {
-            log::debug!("An insecure domain or scheme in origin. Must be localhost or https://");
+            log::error!("An insecure domain or scheme in origin. Must be localhost or https://");
             return Err(WebauthnCError::Security);
         }
 
@@ -222,6 +315,38 @@ impl WebauthnAuthenticator {
         //         Let pubKeyCred be a new PublicKeyCredential object associated with global whose fields are:
         //         For each remaining authenticator in issuedRequests invoke the authenticatorCancel operation on authenticator and remove it from issuedRequests.
         //         Return constructCredentialAlg and terminate this algorithm.
+
+
+
+
+        // For our needs, we let the u2f auth library handle the above, but currently it can't accept
+        // verified devices for u2f with ctap1/2. We may need to change u2f/authenticator library in the future.
+        // As a result this really limits our usage to certain device classes. This is why we implement
+        // this section in a seperate function call.
+
+        let (platform_attached, resident_key, user_verification) = match options.authenticator_selection {
+            Some(auth_sel) => {
+
+                let pa = if auth_sel.as_ref().map(|v| {
+                    v == AuthenticatorAttachment::Platform
+                })
+                .unwrap_or(false);
+                let uv = auth_sel.user_verification == UserVerificationPolicy::Required;
+                (pa, auth_sel.require_resident_key, uv)
+            }
+            None => {
+                (false, false, false)
+            }
+        }
+
+        let r = self.perform_authenticator_u2f(
+            options.rp.id,
+            client_data_json_hash.clone(),
+            timeout,
+            platform_attached,
+            resident_key,
+            user_verification,
+        )?;
 
         // Return a DOMException whose name is "NotAllowedError". In order to prevent information leak that could identify the user without consent, this step MUST NOT be executed before lifetimeTimer has expired. See §14.5 Registration Ceremony Privacy for details.
 
