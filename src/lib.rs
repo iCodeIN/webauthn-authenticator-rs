@@ -2,7 +2,9 @@
 use crate::error::WebauthnCError;
 
 use webauthn_rs::proto::{CreationChallengeResponse, RegisterPublicKeyCredential,
-    RequestChallengeResponse, PublicKeyCredential};
+    RequestChallengeResponse, PublicKeyCredential, CollectedClientData};
+use webauthn_rs::crypto::compute_sha256;
+use url::Url;
 
 pub mod error;
 
@@ -21,44 +23,108 @@ impl WebauthnAuthenticator {
     /// 6.3.2. The authenticatorMakeCredential Operation
     /// https://www.w3.org/TR/webauthn/#op-make-cred
     pub fn do_registration(&self,
-        origin: &str
+        origin: &str,
         options: CreationChallengeResponse,
-        _same_origin_with_ancestors: bool,
+        // _same_origin_with_ancestors: bool,
         ) -> Result<RegisterPublicKeyCredential, WebauthnCError> {
         // Assert: options.publicKey is present.
+        // This is asserted through rust types.
 
         // If sameOriginWithAncestors is false, return a "NotAllowedError" DOMException.
+        // We just don't take this value.
 
         // Let options be the value of options.publicKey.
+        let options = &options.public_key;
 
         // If the timeout member of options is present, check if its value lies within a reasonable range as defined by the client and if not, correct it to the closest value lying within that range. Set a timer lifetimeTimer to this adjusted value. If the timeout member of options is not present, then set lifetimeTimer to a client-specific default.
+        let timeout = options.timeout
+            .map(|t| {
+                if t > 60000 {
+                    60000
+                } else {
+                    t
+                }
+            })
+            .unwrap_or(60000);
 
         // Let callerOrigin be origin. If callerOrigin is an opaque origin, return a DOMException whose name is "NotAllowedError", and terminate this algorithm.
+        // This is a bit unclear - see https://github.com/w3c/wpub/issues/321.
+        // It may be a browser specific quirk.
+        // https://html.spec.whatwg.org/multipage/origin.html
+        // As a result we don't need to check for our needs.
 
-        // Let effectiveDomain be the callerOrigin’s effective domain. If effective domain is not a valid domain, then return a DOMException whose name is "SecurityError" and terminate this algorithm.
+        // Let effectiveDomain be the callerOrigin’s effective domain. If effective domain is not a valid domain, then return a DOMException whose name is "Security" and terminate this algorithm.
+        let caller_origin = Url::parse(origin)
+            .map_err(|pe| {
+                log::debug!("url parse failure -> {:?}", pe);
+                WebauthnCError::Security
+            })?
+        ;
+
+        let effective_domain = caller_origin.domain()
+            // Checking by IP today muddies things. We'd need a check for rp.id about suffixes
+            // to be different for this.
+            // .or_else(|| caller_origin.host_str())
+            .ok_or(WebauthnCError::Security)
+            .map_err(|e| {
+                log::debug!("origin has no domain or host_str");
+                e
+            })?;
+
+        log::debug!("effective domain -> {:?}", effective_domain);
 
         // If options.rp.id
         //      Is present
-        //          If options.rp.id is not a registrable domain suffix of and is not equal to effectiveDomain, return a DOMException whose name is "SecurityError", and terminate this algorithm.
+        //          If options.rp.id is not a registrable domain suffix of and is not equal to effectiveDomain, return a DOMException whose name is "Security", and terminate this algorithm.
         //      Is not present
         //          Set options.rp.id to effectiveDomain.
 
+        if !effective_domain.ends_with(&options.rp.id) {
+            log::debug!("relying party id domain is not suffix of effective domain.");
+            return Err(WebauthnCError::Security);
+        }
+
+        // Check origin is https:// if effectiveDomain != localhost.
+        if !(effective_domain == "localhost" || caller_origin.scheme() == "https") {
+            log::debug!("An insecure domain or scheme in origin. Must be localhost or https://");
+            return Err(WebauthnCError::Security);
+        }
+
         // Let credTypesAndPubKeyAlgs be a new list whose items are pairs of PublicKeyCredentialType and a COSEAlgorithmIdentifier.
+        // Done in rust types.
 
         // For each current of options.pubKeyCredParams:
         //     If current.type does not contain a PublicKeyCredentialType supported by this implementation, then continue.
         //     Let alg be current.alg.
         //     Append the pair of current.type and alg to credTypesAndPubKeyAlgs.
+        let cred_types_and_pub_key_algs: Vec<_> = options.pub_key_cred_params.iter()
+            .filter_map(|param| {
+                if param.type_ != "public-key" {
+                    None
+                } else {
+                    Some((param.type_.clone(), param.alg))
+                }
+            })
+            .collect();
+
+        log::debug!("Found -> {:?}", cred_types_and_pub_key_algs);
 
         // If credTypesAndPubKeyAlgs is empty and options.pubKeyCredParams is not empty, return a DOMException whose name is "NotSupportedError", and terminate this algorithm.
-        // Let clientExtensions be a new map and let authenticatorExtensions be a new map.
+        if cred_types_and_pub_key_algs.is_empty() {
+            return Err(WebauthnCError::NotSupported)
+        }
 
-        // If the extensions member of options is present, then for each extensionId → clientExtensionInput of options.extensions:
-        //     If extensionId is not supported by this client platform or is not a registration extension, then continue.
-        //     Set clientExtensions[extensionId] to clientExtensionInput.
-        //     If extensionId is not an authenticator extension, then continue.
-        //     Let authenticatorExtensionInput be the (CBOR) result of running extensionId’s client extension processing algorithm on clientExtensionInput. If the algorithm returned an error, continue.
-        //     Set authenticatorExtensions[extensionId] to the base64url encoding of authenticatorExtensionInput.
+        // Webauthn-rs doesn't support this yet.
+        /*
+            // Let clientExtensions be a new map and let authenticatorExtensions be a new map.
+
+            // If the extensions member of options is present, then for each extensionId → clientExtensionInput of options.extensions:
+            //     If extensionId is not supported by this client platform or is not a registration extension, then continue.
+            //     Set clientExtensions[extensionId] to clientExtensionInput.
+            //     If extensionId is not an authenticator extension, then continue.
+            //     Let authenticatorExtensionInput be the (CBOR) result of running extensionId’s client extension processing algorithm on clientExtensionInput. If the algorithm returned an error, continue.
+            //     Set authenticatorExtensions[extensionId] to the base64url encoding of authenticatorExtensionInput.
+        */
 
         // Let collectedClientData be a new CollectedClientData instance whose fields are:
         //    type
@@ -67,13 +133,28 @@ impl WebauthnAuthenticator {
         //        The base64url encoding of options.challenge.
         //    origin
         //        The serialization of callerOrigin.
+
+        //    Not Supported Yet.
         //    tokenBinding
         //        The status of Token Binding between the client and the callerOrigin, as well as the Token Binding ID associated with callerOrigin, if one is available.
+        let collected_client_data = CollectedClientData {
+            type_: "webauthn.create".to_string(),
+            challenge: options.challenge.clone(),
+            origin: caller_origin.as_str().to_string(),
+            token_binding: None,
+        };
 
         //  Let clientDataJSON be the JSON-serialized client data constructed from collectedClientData.
+        let client_data_json = serde_json::to_string(&collected_client_data)
+            .map_err(|_| WebauthnCError::JSON)?;
 
         // Let clientDataHash be the hash of the serialized client data represented by clientDataJSON.
+        let client_data_json_hash = compute_sha256(client_data_json.as_bytes());
 
+        log::debug!("client_data_json -> {:?}", client_data_json);
+        log::debug!("client_data_json_hash -> {:?}", client_data_json_hash);
+
+        // Not required.
         // If the options.signal is present and its aborted flag is set to true, return a DOMException whose name is "AbortError" and terminate this algorithm.
 
         // Let issuedRequests be a new ordered set.
@@ -161,6 +242,7 @@ mod tests {
 
     #[test]
     fn webauthn_authenticator_basic_registration() {
+        let _ = env_logger::builder().is_test(true).try_init();
         let chal = CreationChallengeResponse {
             public_key: PublicKeyCredentialCreationOptions {
                 rp: RelyingParty {
@@ -198,7 +280,7 @@ mod tests {
         println!("{:?}", chal);
 
         let wa = WebauthnAuthenticator::new();
-        let r = wa.do_registration(chal, "https://localhost")
+        let r = wa.do_registration("https://localhost", chal)
             .map_err(|e| {
                 eprintln!("Error -> {:?}", e);
                 e
