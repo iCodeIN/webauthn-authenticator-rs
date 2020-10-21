@@ -1,0 +1,19 @@
+[package]
+name = "webauthn-authenticator-rs"
+version = "0.1.0"
+authors = ["William Brown <william@blackhats.net.au>"]
+edition = "2018"
+license = "MPL-2.0"
+description = "Webauthn Authenticator Client Library"
+# documentation = "https://docs.rs/kanidm/latest/kanidm/"
+homepage = "https://github.com/kanidm/webauthn-authenticator-rs/"
+repository = "https://github.com/kanidm/webauthn-authenticator-rs/"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+authenticator = "0.3"
+webauthn-rs = { path = "../webauthn-rs" }
+
+[dev-dependencies]
+base64 = "0.12"
