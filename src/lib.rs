@@ -3,7 +3,8 @@ use crate::error::WebauthnCError;
 
 use webauthn_rs::proto::{CreationChallengeResponse, RegisterPublicKeyCredential,
     RequestChallengeResponse, PublicKeyCredential, CollectedClientData,
-    AuthenticatorAttachment, UserVerificationPolicy
+    AuthenticatorAttachment, UserVerificationPolicy,
+    AttestationObject
     };
 use webauthn_rs::crypto::compute_sha256;
 use url::Url;
@@ -129,6 +130,11 @@ impl WebauthnAuthenticator {
 
         log::debug!("rd -> {:?}", register_data);
         log::debug!("di -> {:?}", device_info);
+
+
+        let ao = AttestationObject::try_from(rd).expect();
+        log::debug!("ao -> {:?}", ao);
+
 
         Ok(())
     }
