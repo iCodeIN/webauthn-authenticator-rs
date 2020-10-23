@@ -309,6 +309,7 @@ impl WebauthnAuthenticator {
             })?;
 
         log::debug!("effective domain -> {:?}", effective_domain);
+        log::debug!("relying party id -> {:?}", options.rp.id);
 
         // If options.rp.id
         //      Is present
@@ -377,7 +378,8 @@ impl WebauthnAuthenticator {
         let collected_client_data = CollectedClientData {
             type_: "webauthn.create".to_string(),
             challenge: options.challenge.clone(),
-            origin: caller_origin.as_str().to_string(),
+            origin: caller_origin.as_str()
+                .trim_right_matches("/").to_string(),
             token_binding: None,
         };
 
@@ -556,7 +558,8 @@ impl WebauthnAuthenticator {
         let mut attest_map = BTreeMap::new();
 
         match options.attestation {
-            None | Some(AttestationConveyancePreference::None)  => {
+            // None | Some(AttestationConveyancePreference::None) => {
+            _ => {
                 attest_map.insert(
                     Value::Text("fmt".to_string()),
                     Value::Text("none".to_string()),
@@ -570,10 +573,12 @@ impl WebauthnAuthenticator {
                     Value::Bytes(authdata)
                 );
             }
+            /*
             _ => {
             //    create a u2f attestation from authData, attest cert, a signature,)
                 unimplemented!();
             }
+            */
         }
 
         let ao = Value::Map(attest_map);
@@ -614,6 +619,8 @@ mod tests {
     use crate::WebauthnAuthenticator;
     use webauthn_rs::proto::*;
     use webauthn_rs::base64_data::Base64UrlSafeData;
+    use webauthn_rs::Webauthn;
+    use webauthn_rs::ephemeral::WebauthnEphemeralConfig;
     pub const CHALLENGE_SIZE_BYTES: usize = 32;
 
     #[test]
@@ -661,5 +668,51 @@ mod tests {
             })
             .expect("Failed to register");
 
+    }
+
+    #[test]
+    fn webauthn_authenticator_wan_interact() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let wan_c = WebauthnEphemeralConfig::new(
+            "https://localhost:8080/auth",
+            "https://localhost:8080",
+            "localhost",
+            None,
+        );
+
+        let mut wan = Webauthn::new(wan_c);
+
+        let username = "william".to_string();
+
+        let (chal, reg_state) = wan.generate_challenge_register(
+            &username,
+            Some(UserVerificationPolicy::Discouraged)
+        ).unwrap();
+
+        println!("🍿 challenge -> {:?}", chal);
+
+        let wa = WebauthnAuthenticator::new();
+        let r = wa.do_registration("https://localhost:8080", chal)
+            .map_err(|e| {
+                eprintln!("Error -> {:?}", e);
+                e
+            })
+            .expect("Failed to register");
+
+        let cred = wan.register_credential(
+            r, reg_state, |_| { Ok(false) }
+        ).unwrap();
+
+        let (chal, auth_state) = wan.generate_challenge_authenticate(
+            vec![cred], Some(UserVerificationPolicy::Discouraged)
+        ).unwrap();
+
+        let r = wa.do_authentication(chal)
+            .map_err(|e| {
+                eprintln!("Error -> {:?}", e);
+                e
+            })
+            .expect("Failed to auth");
     }
 }
