@@ -7,5 +7,5 @@ pub enum WebauthnCError {
     NotSupported,
     PlatformAuthenticator,
     Internal,
-    ParseNOMFailure
+    ParseNOMFailure,
 }
