@@ -10,7 +10,8 @@ use webauthn_rs::proto::{CreationChallengeResponse, RegisterPublicKeyCredential,
     // AttestationObject
     AuthenticatorData,
     AuthenticatorAttestationResponseRaw,
-    AttestationConveyancePreference
+    AttestationConveyancePreference,
+    AuthenticatorAssertionResponseRaw
     };
 use webauthn_rs::crypto::compute_sha256;
 use url::Url;
@@ -25,7 +26,9 @@ use authenticator::{authenticatorservice::AuthenticatorService,
     RegisterFlags,
     statecallback::StateCallback,
     StatusUpdate,
-
+    SignFlags,
+    KeyHandle,
+    AuthenticatorTransports
     };
 
 
@@ -120,6 +123,7 @@ use authenticator::{
 };
 */
 
+
 // A U2F Sign operation creates a signature over the "param" arguments (plus
 // some other stuff) using the private key indicated in the key handle argument.
 //
@@ -136,6 +140,27 @@ use authenticator::{
 //  4     Counter
 //  *     Signature
 
+#[derive(Debug)]
+struct U2FSignData {
+    appid: Vec<u8>,
+    key_handle: Vec<u8>,
+    counter: u32,
+    signature: Vec<u8>,
+    user_present: u8,
+}
+
+named!( u2sd_sign_data_parser<&[u8], (u8, u32, Vec<u8>)>,
+    do_parse!(
+        up: call!(nom::be_u8) >>
+        cnt: u32!(nom::Endianness::Big) >>
+        sig: call!(nom::rest) >>
+        (
+            (up, cnt, sig.to_vec())
+        )
+    )
+);
+
+
 pub mod error;
 
 pub struct WebauthnAuthenticator {
@@ -151,7 +176,7 @@ impl WebauthnAuthenticator {
         //          Invoke the authenticatorMakeCredential operation on authenticator with clientDataHash, options.rp, options.user, options.authenticatorSelection.requireResidentKey, userPresence, userVerification, credTypesAndPubKeyAlgs, excludeCredentialDescriptorList, and authenticatorExtensions as parameters.
     // }
 
-    fn perform_authenticator_u2f(&self,
+    fn perform_u2f_register(&self,
         // This is rp.id_hash
         app_bytes: Vec<u8>,
         // This is client_data_json_hash
@@ -163,7 +188,6 @@ impl WebauthnAuthenticator {
         resident_key: bool,
         user_verification: bool,
     ) -> Result<U2FRegistrationData, WebauthnCError> {
-
         if user_verification {
             log::error!("User Verification not supported by attestation-rs");
             return Err(WebauthnCError::NotSupported);
@@ -485,7 +509,7 @@ impl WebauthnAuthenticator {
 
         let rp_id_hash = compute_sha256(options.rp.id.as_bytes());
 
-        let u2rd = self.perform_authenticator_u2f(
+        let u2rd = self.perform_u2f_register(
             rp_id_hash.clone(),
             client_data_json_hash,
             timeout.into(),
@@ -609,8 +633,244 @@ impl WebauthnAuthenticator {
         Ok(rego)
     }
 
-    pub fn do_authentication(&self, chal: RequestChallengeResponse) -> Result<PublicKeyCredential, WebauthnCError> {
-        unimplemented!();
+    // Then, using transport, invoke the authenticatorGetAssertion operation on authenticator, with rpId, clientDataHash, allowCredentialDescriptorList, userPresence, userVerification, and authenticatorExtensions as parameters.
+
+    fn perform_u2f_sign(&self,
+        // This is rp.id_hash
+        app_bytes: Vec<u8>,
+        // This is client_data_json_hash
+        chal_bytes: Vec<u8>,
+        // timeout from options
+        timeout_ms: u64,
+        // list of creds
+        allowed_credentials: Vec<KeyHandle>,
+        user_verification: bool,
+    ) -> Result<U2FSignData, WebauthnCError> {
+        if user_verification {
+            log::error!("User Verification not supported by attestation-rs");
+            return Err(WebauthnCError::NotSupported);
+        }
+
+        let mut manager = AuthenticatorService::new()
+            .map_err(|e| {
+                log::error!("Authentication Service -> {:?}", e);
+                WebauthnCError::PlatformAuthenticator
+            })?;
+
+        manager.add_u2f_usb_hid_platform_transports();
+
+        let mut flags = SignFlags::empty();
+
+        log::debug!("flags -> {:?}", flags);
+
+        let (status_tx, status_rx) = channel::<StatusUpdate>();
+        let (register_tx, register_rx) = channel();
+
+        thread::spawn(move || loop {
+            match status_rx.recv() {
+                Ok(StatusUpdate::DeviceAvailable { dev_info }) => {
+                    log::info!("STATUS: device available: {}", dev_info)
+                }
+                Ok(StatusUpdate::DeviceUnavailable { dev_info }) => {
+                    log::error!("STATUS: device unavailable: {}", dev_info)
+                }
+                Ok(StatusUpdate::Success { dev_info }) => {
+                    log::info!("STATUS: success using device: {}", dev_info);
+                }
+                Err(RecvError) => {
+                    log::debug!("STATUS: end");
+                    return;
+                }
+            }
+        });
+
+        let callback = StateCallback::new(Box::new(move |rv| {
+            register_tx.send(rv).unwrap();
+        }));
+
+        manager.sign(
+            flags,
+            timeout_ms,
+            chal_bytes,
+            vec![app_bytes],
+            allowed_credentials,
+            status_tx.clone(),
+            callback
+        );
+
+        let register_result = register_rx.recv()
+            .map_err(|e| {
+                log::error!("Registration Channel Error -> {:?}", e);
+                WebauthnCError::Internal
+            })
+            ?;
+
+        let (appid, key_handle, sign_data, device_info) = register_result
+            .map_err(|e| {
+                log::error!("Device Registration Error -> {:?}", e);
+                WebauthnCError::Internal
+            })
+            ?;
+
+        log::debug!("di ->  {:?}", device_info);
+
+        let (_, (user_present, counter, signature)) = u2sd_sign_data_parser(sign_data.as_slice())
+            .map_err(|_| WebauthnCError::ParseNOMFailure)?;
+
+        Ok(U2FSignData{
+            appid, key_handle, counter, signature, user_present
+        })
+    }
+
+    /// https://www.w3.org/TR/webauthn/#getAssertion
+    pub fn do_authentication(&self,
+        origin: &str,
+        options: RequestChallengeResponse) -> Result<PublicKeyCredential, WebauthnCError> {
+        // Assert: options.publicKey is present.
+        // This is asserted through rust types.
+
+        // If sameOriginWithAncestors is false, return a "NotAllowedError" DOMException.
+        // We just don't take this value.
+
+        // Let options be the value of options.publicKey.
+        let options = &options.public_key;
+
+        // If the timeout member of options is present, check if its value lies within a reasonable range as defined by the client and if not, correct it to the closest value lying within that range. Set a timer lifetimeTimer to this adjusted value. If the timeout member of options is not present, then set lifetimeTimer to a client-specific default.
+        let timeout = options.timeout
+            .map(|t| {
+                if t > 60000 {
+                    60000
+                } else {
+                    t
+                }
+            })
+            .unwrap_or(60000);
+
+        // Let callerOrigin be origin. If callerOrigin is an opaque origin, return a DOMException whose name is "NotAllowedError", and terminate this algorithm.
+        // This is a bit unclear - see https://github.com/w3c/wpub/issues/321.
+        // It may be a browser specific quirk.
+        // https://html.spec.whatwg.org/multipage/origin.html
+        // As a result we don't need to check for our needs.
+
+        // Let effectiveDomain be the callerOrigin’s effective domain. If effective domain is not a valid domain, then return a DOMException whose name is "Security" and terminate this algorithm.
+        let caller_origin = Url::parse(origin)
+            .map_err(|pe| {
+                log::error!("url parse failure -> {:?}", pe);
+                WebauthnCError::Security
+            })?
+        ;
+
+        let effective_domain = caller_origin.domain()
+            // Checking by IP today muddies things. We'd need a check for rp.id about suffixes
+            // to be different for this.
+            // .or_else(|| caller_origin.host_str())
+            .ok_or(WebauthnCError::Security)
+            .map_err(|e| {
+                log::error!("origin has no domain or host_str");
+                e
+            })?;
+
+        log::debug!("effective domain -> {:?}", effective_domain);
+        log::debug!("relying party id -> {:?}", options.rp_id);
+
+        // If options.rp.id
+        //      Is present
+        //          If options.rp.id is not a registrable domain suffix of and is not equal to effectiveDomain, return a DOMException whose name is "Security", and terminate this algorithm.
+        //      Is not present
+        //          Set options.rp.id to effectiveDomain.
+
+        if !effective_domain.ends_with(&options.rp_id) {
+            log::error!("relying party id domain is not suffix of effective domain.");
+            return Err(WebauthnCError::Security);
+        }
+
+        // Check origin is https:// if effectiveDomain != localhost.
+        if !(effective_domain == "localhost" || caller_origin.scheme() == "https") {
+            log::error!("An insecure domain or scheme in origin. Must be localhost or https://");
+            return Err(WebauthnCError::Security);
+        }
+
+        // Let clientExtensions be a new map and let authenticatorExtensions be a new map.
+
+        // If the extensions member of options is present, then for each extensionId → clientExtensionInput of options.extensions:
+        // ...
+
+        // Let collectedClientData be a new CollectedClientData instance whose fields are:
+        let collected_client_data = CollectedClientData {
+            type_: "webauthn.get".to_string(),
+            challenge: options.challenge.clone(),
+            origin: caller_origin.as_str()
+                .trim_right_matches("/").to_string(),
+            token_binding: None,
+        };
+
+        // Let clientDataJSON be the JSON-serialized client data constructed from collectedClientData.
+        let client_data_json = serde_json::to_string(&collected_client_data)
+            .map_err(|_| WebauthnCError::JSON)?;
+
+        // Let clientDataHash be the hash of the serialized client data represented by clientDataJSON.
+        let client_data_json_hash = compute_sha256(client_data_json.as_bytes());
+
+        log::debug!("client_data_json -> {:?}", client_data_json);
+        log::debug!("client_data_json_hash -> {:?}", client_data_json_hash);
+
+        // This is where we deviate from the spec, since we aren't a browser.
+
+        let user_verification = &options.user_verification == &UserVerificationPolicy::Required;
+
+        let rp_id_hash = compute_sha256(options.rp_id.as_bytes());
+
+        let allowed_credentials: Vec<KeyHandle> = options.allow_credentials
+            .iter()
+            .map(|ac| {
+                KeyHandle {
+                    // Dup the inner id.
+                    credential: ac.id.0.clone(),
+                    transports: AuthenticatorTransports::empty(),
+                }
+            })
+            .collect();
+
+        let u2sd = self.perform_u2f_sign(
+            rp_id_hash.clone(),
+            client_data_json_hash,
+            timeout.into(),
+            allowed_credentials,
+            user_verification
+        )?;
+
+        log::debug!("u2sd -> {:?}", u2sd);
+        // Transform the result to webauthn
+
+        // The flags are set from the device.
+
+        let authdata: Vec<u8> =
+            rp_id_hash.iter().map(|v| *v)
+            .chain(
+                iter::once(u2sd.user_present)
+            )
+            .chain(
+                // A 0 u32 counter
+                u2sd.counter.to_be_bytes().iter()
+                    .map(|v| *v)
+            )
+            .collect();
+
+        let id: String = Base64UrlSafeData(u2sd.key_handle.clone()).to_string();
+
+        Ok(PublicKeyCredential {
+            id,
+            raw_id: Base64UrlSafeData(u2sd.key_handle.clone()),
+            response: AuthenticatorAssertionResponseRaw {
+                authenticator_data: Base64UrlSafeData(authdata),
+                client_data_json: Base64UrlSafeData(
+                    client_data_json.as_bytes().to_vec()
+                ),
+                signature: Base64UrlSafeData(u2sd.signature.clone()),
+                user_handle: None,
+            },
+            type_: "public-key".to_string()
+        })
     }
 }
 
@@ -623,6 +883,7 @@ mod tests {
     use webauthn_rs::ephemeral::WebauthnEphemeralConfig;
     pub const CHALLENGE_SIZE_BYTES: usize = 32;
 
+    /*
     #[test]
     fn webauthn_authenticator_basic_registration() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -669,6 +930,7 @@ mod tests {
             .expect("Failed to register");
 
     }
+    */
 
     #[test]
     fn webauthn_authenticator_wan_interact() {
@@ -708,11 +970,16 @@ mod tests {
             vec![cred], Some(UserVerificationPolicy::Discouraged)
         ).unwrap();
 
-        let r = wa.do_authentication(chal)
+        let r = wa.do_authentication("https://localhost:8080", chal)
             .map_err(|e| {
                 eprintln!("Error -> {:?}", e);
                 e
             })
             .expect("Failed to auth");
+
+        let auth_res = wan.authenticate_credential(
+            r, auth_state
+        ).expect("webauth authentication denied");
+        log::debug!("auth_res -> {:?}", auth_res);
     }
 }
