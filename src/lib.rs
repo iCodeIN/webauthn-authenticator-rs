@@ -564,6 +564,7 @@ impl<T> WebauthnAuthenticator<T>
 mod tests {
     use crate::WebauthnAuthenticator;
     use crate::u2fhid::U2FHid;
+    use crate::softtok::U2FSoft;
     // use webauthn_rs::base64_data::Base64UrlSafeData;
     use webauthn_rs::ephemeral::WebauthnEphemeralConfig;
     use webauthn_rs::proto::*;
@@ -620,7 +621,7 @@ mod tests {
     */
 
     #[test]
-    fn webauthn_authenticator_wan_interact() {
+    fn webauthn_authenticator_wan_u2fhid_interact() {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let wan_c = WebauthnEphemeralConfig::new(
@@ -641,6 +642,58 @@ mod tests {
         println!("🍿 challenge -> {:?}", chal);
 
         let wa = WebauthnAuthenticator::new(U2FHid::new());
+        let r = wa
+            .do_registration("https://localhost:8080", chal)
+            .map_err(|e| {
+                eprintln!("Error -> {:?}", e);
+                e
+            })
+            .expect("Failed to register");
+
+        let cred = wan
+            .register_credential(r, reg_state, |_| Ok(false))
+            .unwrap();
+
+        let (chal, auth_state) = wan
+            .generate_challenge_authenticate(vec![cred], Some(UserVerificationPolicy::Discouraged))
+            .unwrap();
+
+        let r = wa
+            .do_authentication("https://localhost:8080", chal)
+            .map_err(|e| {
+                eprintln!("Error -> {:?}", e);
+                e
+            })
+            .expect("Failed to auth");
+
+        let auth_res = wan
+            .authenticate_credential(r, auth_state)
+            .expect("webauth authentication denied");
+        log::debug!("auth_res -> {:?}", auth_res);
+    }
+
+    #[test]
+    fn webauthn_authenticator_wan_softtoken() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let wan_c = WebauthnEphemeralConfig::new(
+            "https://localhost:8080/auth",
+            "https://localhost:8080",
+            "localhost",
+            None,
+        );
+
+        let mut wan = Webauthn::new(wan_c);
+
+        let username = "william".to_string();
+
+        let (chal, reg_state) = wan
+            .generate_challenge_register(&username, Some(UserVerificationPolicy::Discouraged))
+            .unwrap();
+
+        println!("🍿 challenge -> {:?}", chal);
+
+        let wa = WebauthnAuthenticator::new(U2FSoft::new());
         let r = wa
             .do_registration("https://localhost:8080", chal)
             .map_err(|e| {
