@@ -8,4 +8,5 @@ pub enum WebauthnCError {
     PlatformAuthenticator,
     Internal,
     ParseNOMFailure,
+    OpenSSL
 }
