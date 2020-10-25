@@ -1,20 +1,18 @@
-
-use crate::U2FToken;
 use crate::error::WebauthnCError;
-use crate::{U2FSignData, U2FRegistrationData};
+use crate::U2FToken;
+use crate::{U2FRegistrationData, U2FSignData};
 use webauthn_rs::proto::AllowCredentials;
 
 use std::convert::TryFrom;
 
-use std::sync::mpsc::channel;
-use std::thread;
 use authenticator::{
     authenticatorservice::AuthenticatorService, statecallback::StateCallback,
     AuthenticatorTransports, KeyHandle, RegisterFlags, SignFlags, StatusUpdate,
 };
+use std::sync::mpsc::channel;
+use std::thread;
 
-
-pub struct U2FHid { }
+pub struct U2FHid {}
 
 // The format of the return registration data is as follows:
 //
@@ -130,7 +128,7 @@ named!( u2sd_sign_data_parser<&[u8], (u8, u32, Vec<u8>)>,
 
 impl U2FHid {
     pub fn new() -> Self {
-        U2FHid { }
+        U2FHid {}
     }
 }
 
@@ -140,7 +138,7 @@ impl U2FToken for U2FHid {
     // }
 
     fn perform_u2f_register(
-        &self,
+        &mut self,
         // This is rp.id_hash
         app_bytes: Vec<u8>,
         // This is client_data_json_hash
@@ -235,10 +233,9 @@ impl U2FToken for U2FHid {
         Ok(u2rd)
     }
 
-
     // Then, using transport, invoke the authenticatorGetAssertion operation on authenticator, with rpId, clientDataHash, allowCredentialDescriptorList, userPresence, userVerification, and authenticatorExtensions as parameters.
     fn perform_u2f_sign(
-        &self,
+        &mut self,
         // This is rp.id_hash
         app_bytes: Vec<u8>,
         // This is client_data_json_hash
@@ -335,7 +332,4 @@ impl U2FToken for U2FHid {
             user_present,
         })
     }
-
 }
-
-

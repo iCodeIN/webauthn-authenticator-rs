@@ -4,13 +4,14 @@ extern crate nom;
 use crate::error::WebauthnCError;
 use webauthn_rs::base64_data::Base64UrlSafeData;
 
-use std::convert::TryFrom;
 use serde_cbor::value::Value;
 use std::collections::BTreeMap;
+use std::convert::TryFrom;
 use std::iter;
 use url::Url;
 use webauthn_rs::crypto::compute_sha256;
 use webauthn_rs::proto::{
+    AllowCredentials,
     // AttestationConveyancePreference,
     AuthenticatorAssertionResponseRaw,
     AuthenticatorAttachment,
@@ -23,7 +24,6 @@ use webauthn_rs::proto::{
     RegisterPublicKeyCredential,
     RequestChallengeResponse,
     UserVerificationPolicy,
-    AllowCredentials
 };
 
 #[derive(Debug)]
@@ -45,18 +45,19 @@ pub struct U2FSignData {
 }
 
 pub mod error;
-pub mod u2fhid;
 pub mod softtok;
+pub mod u2fhid;
 
-pub struct WebauthnAuthenticator<T> 
-where T: U2FToken
+pub struct WebauthnAuthenticator<T>
+where
+    T: U2FToken,
 {
-    token: T
+    token: T,
 }
 
 pub trait U2FToken {
     fn perform_u2f_register(
-        &self,
+        &mut self,
         // This is rp.id_hash
         app_bytes: Vec<u8>,
         // This is client_data_json_hash
@@ -69,7 +70,7 @@ pub trait U2FToken {
     ) -> Result<U2FRegistrationData, WebauthnCError>;
 
     fn perform_u2f_sign(
-        &self,
+        &mut self,
         // This is rp.id_hash
         app_bytes: Vec<u8>,
         // This is client_data_json_hash
@@ -83,17 +84,17 @@ pub trait U2FToken {
 }
 
 impl<T> WebauthnAuthenticator<T>
-    where T: U2FToken
+where
+    T: U2FToken,
 {
     pub fn new(token: T) -> Self {
-        WebauthnAuthenticator {
-            token
-        }
+        WebauthnAuthenticator { token }
     }
 }
 
 impl<T> WebauthnAuthenticator<T>
-    where T: U2FToken
+where
+    T: U2FToken,
 {
     /// 5.1.3. Create a New Credential - PublicKeyCredential’s [[Create]](origin, options, sameOriginWithAncestors) Method
     /// https://www.w3.org/TR/webauthn/#createCredential
@@ -101,7 +102,7 @@ impl<T> WebauthnAuthenticator<T>
     /// 6.3.2. The authenticatorMakeCredential Operation
     /// https://www.w3.org/TR/webauthn/#op-make-cred
     pub fn do_registration(
-        &self,
+        &mut self,
         origin: &str,
         options: CreationChallengeResponse,
         // _same_origin_with_ancestors: bool,
@@ -430,7 +431,7 @@ impl<T> WebauthnAuthenticator<T>
 
     /// https://www.w3.org/TR/webauthn/#getAssertion
     pub fn do_authentication(
-        &self,
+        &mut self,
         origin: &str,
         options: RequestChallengeResponse,
     ) -> Result<PublicKeyCredential, WebauthnCError> {
@@ -562,9 +563,9 @@ impl<T> WebauthnAuthenticator<T>
 
 #[cfg(test)]
 mod tests {
-    use crate::WebauthnAuthenticator;
-    use crate::u2fhid::U2FHid;
     use crate::softtok::U2FSoft;
+    use crate::u2fhid::U2FHid;
+    use crate::WebauthnAuthenticator;
     // use webauthn_rs::base64_data::Base64UrlSafeData;
     use webauthn_rs::ephemeral::WebauthnEphemeralConfig;
     use webauthn_rs::proto::*;
@@ -641,7 +642,7 @@ mod tests {
 
         println!("🍿 challenge -> {:?}", chal);
 
-        let wa = WebauthnAuthenticator::new(U2FHid::new());
+        let mut wa = WebauthnAuthenticator::new(U2FHid::new());
         let r = wa
             .do_registration("https://localhost:8080", chal)
             .map_err(|e| {
@@ -693,7 +694,7 @@ mod tests {
 
         println!("🍿 challenge -> {:?}", chal);
 
-        let wa = WebauthnAuthenticator::new(U2FSoft::new());
+        let mut wa = WebauthnAuthenticator::new(U2FSoft::new());
         let r = wa
             .do_registration("https://localhost:8080", chal)
             .map_err(|e| {
