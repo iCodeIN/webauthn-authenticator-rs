@@ -4,48 +4,30 @@ extern crate nom;
 use crate::error::WebauthnCError;
 use webauthn_rs::base64_data::Base64UrlSafeData;
 
+use std::convert::TryFrom;
 use serde_cbor::value::Value;
 use std::collections::BTreeMap;
-use std::convert::TryFrom;
 use std::iter;
-use std::sync::mpsc::channel;
-use std::thread;
 use url::Url;
 use webauthn_rs::crypto::compute_sha256;
 use webauthn_rs::proto::{
-    AttestationConveyancePreference,
+    // AttestationConveyancePreference,
     AuthenticatorAssertionResponseRaw,
     AuthenticatorAttachment,
     AuthenticatorAttestationResponseRaw,
     // AttestationObject
-    AuthenticatorData,
+    // AuthenticatorData,
     CollectedClientData,
     CreationChallengeResponse,
     PublicKeyCredential,
     RegisterPublicKeyCredential,
     RequestChallengeResponse,
     UserVerificationPolicy,
+    AllowCredentials
 };
-
-use authenticator::{
-    authenticatorservice::AuthenticatorService, statecallback::StateCallback,
-    AuthenticatorTransports, KeyHandle, RegisterFlags, SignFlags, StatusUpdate,
-};
-
-// The format of the return registration data is as follows:
-//
-// Bytes  Value
-// 1      0x05
-// 65     public key
-// 1      key handle length
-// *      key handle
-// ASN.1  attestation certificate
-// *      attestation signature
-
-// https://hg.mozilla.org/mozilla-central/file/6d98cc745df58e544a8d71c131f060fc2c460d83/dom/webauthn/WebAuthnUtil.cpp#l285
 
 #[derive(Debug)]
-struct U2FRegistrationData {
+pub struct U2FRegistrationData {
     public_key_x: Vec<u8>,
     public_key_y: Vec<u8>,
     key_handle: Vec<u8>,
@@ -53,105 +35,8 @@ struct U2FRegistrationData {
     signature: Vec<u8>,
 }
 
-fn asn1_seq_extractor(i: &[u8]) -> nom::IResult<&[u8], &[u8]> {
-    // Assert we have enough bytes for the ASN.1 header.
-    if i.len() < 2 {
-        return Err(nom::Err::Failure(nom::Context::Code(
-            i,
-            nom::ErrorKind::Custom(1),
-        )));
-    }
-    if i[0] != 0x30 {
-        // It's not an ASN.1 sequence.
-        return Err(nom::Err::Failure(nom::Context::Code(
-            i,
-            nom::ErrorKind::Custom(2),
-        )));
-    }
-
-    let length: usize = if i[1] & 0x40 == 0x40 {
-        // This is a long form length
-        return Err(nom::Err::Failure(nom::Context::Code(
-            i,
-            nom::ErrorKind::Custom(3),
-        )));
-    } else {
-        i[1] as usize
-    };
-
-    if i.len() < (2 + length) {
-        // Not enough bytes to satisfy.
-        return Err(nom::Err::Failure(nom::Context::Code(
-            i,
-            nom::ErrorKind::Custom(4),
-        )));
-    }
-
-    let (cert, rem) = i.split_at(2 + length);
-    Ok((rem, cert))
-}
-
-named!( u2rd_parser<&[u8], U2FRegistrationData>,
-    preceded!(
-        verify!(take!(1), |val: &[u8]| val == &[0x05]),
-        do_parse!(
-            public_key_x: preceded!(
-                verify!(take!(1), |val: &[u8]| val == &[0x04]),
-                take!(32)
-            ) >>
-            public_key_y: take!(32) >>
-            key_handle: length_data!(nom::be_u8) >>
-            att_cert: call!(asn1_seq_extractor) >>
-            signature: call!(nom::rest) >>
-            (U2FRegistrationData {
-                public_key_x: public_key_x.to_vec(),
-                public_key_y: public_key_y.to_vec(),
-                key_handle: key_handle.to_vec(),
-                att_cert: att_cert.to_vec(),
-                signature: signature.to_vec(),
-            })
-        )
-    )
-);
-
-impl TryFrom<&[u8]> for U2FRegistrationData {
-    type Error = WebauthnCError;
-    fn try_from(data: &[u8]) -> Result<U2FRegistrationData, WebauthnCError> {
-        u2rd_parser(data)
-            .map_err(|_| WebauthnCError::ParseNOMFailure)
-            .map(|(_, ad)| ad)
-    }
-}
-
-// https://hg.mozilla.org/mozilla-central/file/6d98cc745df58e544a8d71c131f060fc2c460d83/dom/webauthn/U2FHIDTokenManager.cpp#l296
-// https://hg.mozilla.org/mozilla-central/file/6d98cc745df58e544a8d71c131f060fc2c460d83/dom/webauthn/WebAuthnUtil.cpp#l187
-
-/*
-use authenticator::{
-    REQUIRE_RESIDENT_KEY,
-    REQUIRE_USER_VERIFICATION,
-    REQUIRE_PLATFORM_ATTACHMENT,
-};
-*/
-
-// A U2F Sign operation creates a signature over the "param" arguments (plus
-// some other stuff) using the private key indicated in the key handle argument.
-//
-// The format of the signed data is as follows:
-//
-//  32    Application parameter
-//  1     User presence (0x01)
-//  4     Counter
-//  32    Challenge parameter
-//
-// The format of the signature data is as follows:
-//
-//  1     User presence
-//  4     Counter
-//  *     Signature
-
 #[derive(Debug)]
-struct U2FSignData {
+pub struct U2FSignData {
     appid: Vec<u8>,
     key_handle: Vec<u8>,
     counter: u32,
@@ -159,30 +44,17 @@ struct U2FSignData {
     user_present: u8,
 }
 
-named!( u2sd_sign_data_parser<&[u8], (u8, u32, Vec<u8>)>,
-    do_parse!(
-        up: call!(nom::be_u8) >>
-        cnt: u32!(nom::Endianness::Big) >>
-        sig: call!(nom::rest) >>
-        (
-            (up, cnt, sig.to_vec())
-        )
-    )
-);
-
 pub mod error;
+pub mod u2fhid;
+pub mod softtok;
 
-pub struct WebauthnAuthenticator {}
+pub struct WebauthnAuthenticator<T> 
+where T: U2FToken
+{
+    token: T
+}
 
-impl WebauthnAuthenticator {
-    pub fn new() -> Self {
-        WebauthnAuthenticator {}
-    }
-
-    // fn authenticator_make_credential(&self) -> {
-    //          Invoke the authenticatorMakeCredential operation on authenticator with clientDataHash, options.rp, options.user, options.authenticatorSelection.requireResidentKey, userPresence, userVerification, credTypesAndPubKeyAlgs, excludeCredentialDescriptorList, and authenticatorExtensions as parameters.
-    // }
-
+pub trait U2FToken {
     fn perform_u2f_register(
         &self,
         // This is rp.id_hash
@@ -191,94 +63,38 @@ impl WebauthnAuthenticator {
         chal_bytes: Vec<u8>,
         // timeout from options
         timeout_ms: u64,
-        //
         platform_attached: bool,
         resident_key: bool,
         user_verification: bool,
-    ) -> Result<U2FRegistrationData, WebauthnCError> {
-        if user_verification {
-            log::error!("User Verification not supported by attestation-rs");
-            return Err(WebauthnCError::NotSupported);
+    ) -> Result<U2FRegistrationData, WebauthnCError>;
+
+    fn perform_u2f_sign(
+        &self,
+        // This is rp.id_hash
+        app_bytes: Vec<u8>,
+        // This is client_data_json_hash
+        chal_bytes: Vec<u8>,
+        // timeout from options
+        timeout_ms: u64,
+        // list of creds
+        allowed_credentials: &[AllowCredentials],
+        user_verification: bool,
+    ) -> Result<U2FSignData, WebauthnCError>;
+}
+
+impl<T> WebauthnAuthenticator<T>
+    where T: U2FToken
+{
+    pub fn new(token: T) -> Self {
+        WebauthnAuthenticator {
+            token
         }
-
-        let mut manager = AuthenticatorService::new().map_err(|e| {
-            log::error!("Authentication Service -> {:?}", e);
-            WebauthnCError::PlatformAuthenticator
-        })?;
-
-        manager.add_u2f_usb_hid_platform_transports();
-
-        let mut flags = RegisterFlags::empty();
-
-        if platform_attached {
-            flags.insert(RegisterFlags::REQUIRE_PLATFORM_ATTACHMENT)
-        }
-
-        if resident_key {
-            flags.insert(RegisterFlags::REQUIRE_RESIDENT_KEY)
-        }
-
-        log::debug!("flags -> {:?}", flags);
-
-        let (status_tx, status_rx) = channel::<StatusUpdate>();
-        let (register_tx, register_rx) = channel();
-
-        thread::spawn(move || loop {
-            match status_rx.recv() {
-                Ok(StatusUpdate::DeviceAvailable { dev_info }) => {
-                    log::info!("STATUS: device available: {}", dev_info)
-                }
-                Ok(StatusUpdate::DeviceUnavailable { dev_info }) => {
-                    log::error!("STATUS: device unavailable: {}", dev_info)
-                }
-                Ok(StatusUpdate::Success { dev_info }) => {
-                    log::info!("STATUS: success using device: {}", dev_info);
-                }
-                Err(RecvError) => {
-                    log::debug!("STATUS: end");
-                    return;
-                }
-            }
-        });
-
-        let callback = StateCallback::new(Box::new(move |rv| {
-            register_tx.send(rv).unwrap();
-        }));
-
-        manager.register(
-            flags,
-            timeout_ms,
-            chal_bytes,
-            app_bytes,
-            vec![],
-            status_tx.clone(),
-            callback,
-        );
-
-        let register_result = register_rx.recv().map_err(|e| {
-            log::error!("Registration Channel Error -> {:?}", e);
-            WebauthnCError::Internal
-        })?;
-
-        let (register_data, device_info) = register_result.map_err(|e| {
-            log::error!("Device Registration Error -> {:?}", e);
-            WebauthnCError::Internal
-        })?;
-
-        log::debug!("di ->  {:?}", device_info);
-
-        // Now we have to transform the u2f response to something that
-        // webauthn can understand.
-
-        let u2rd = U2FRegistrationData::try_from(register_data.as_slice()).map_err(|e| {
-            log::error!("U2F Registration Data Corrupt -> {:?}", e);
-            e
-        })?;
-
-        log::debug!("u2rd -> {:?}", u2rd);
-        Ok(u2rd)
     }
+}
 
+impl<T> WebauthnAuthenticator<T>
+    where T: U2FToken
+{
     /// 5.1.3. Create a New Credential - PublicKeyCredential’s [[Create]](origin, options, sameOriginWithAncestors) Method
     /// https://www.w3.org/TR/webauthn/#createCredential
     ///
@@ -400,7 +216,7 @@ impl WebauthnAuthenticator {
         let collected_client_data = CollectedClientData {
             type_: "webauthn.create".to_string(),
             challenge: options.challenge.clone(),
-            origin: caller_origin.as_str().trim_right_matches("/").to_string(),
+            origin: caller_origin.as_str().trim_end_matches("/").to_string(),
             token_binding: None,
         };
 
@@ -503,7 +319,7 @@ impl WebauthnAuthenticator {
 
         let rp_id_hash = compute_sha256(options.rp.id.as_bytes());
 
-        let u2rd = self.perform_u2f_register(
+        let u2rd = self.token.perform_u2f_register(
             rp_id_hash.clone(),
             client_data_json_hash,
             timeout.into(),
@@ -612,96 +428,6 @@ impl WebauthnAuthenticator {
         Ok(rego)
     }
 
-    // Then, using transport, invoke the authenticatorGetAssertion operation on authenticator, with rpId, clientDataHash, allowCredentialDescriptorList, userPresence, userVerification, and authenticatorExtensions as parameters.
-
-    fn perform_u2f_sign(
-        &self,
-        // This is rp.id_hash
-        app_bytes: Vec<u8>,
-        // This is client_data_json_hash
-        chal_bytes: Vec<u8>,
-        // timeout from options
-        timeout_ms: u64,
-        // list of creds
-        allowed_credentials: Vec<KeyHandle>,
-        user_verification: bool,
-    ) -> Result<U2FSignData, WebauthnCError> {
-        if user_verification {
-            log::error!("User Verification not supported by attestation-rs");
-            return Err(WebauthnCError::NotSupported);
-        }
-
-        let mut manager = AuthenticatorService::new().map_err(|e| {
-            log::error!("Authentication Service -> {:?}", e);
-            WebauthnCError::PlatformAuthenticator
-        })?;
-
-        manager.add_u2f_usb_hid_platform_transports();
-
-        let mut flags = SignFlags::empty();
-
-        log::debug!("flags -> {:?}", flags);
-
-        let (status_tx, status_rx) = channel::<StatusUpdate>();
-        let (register_tx, register_rx) = channel();
-
-        thread::spawn(move || loop {
-            match status_rx.recv() {
-                Ok(StatusUpdate::DeviceAvailable { dev_info }) => {
-                    log::info!("STATUS: device available: {}", dev_info)
-                }
-                Ok(StatusUpdate::DeviceUnavailable { dev_info }) => {
-                    log::error!("STATUS: device unavailable: {}", dev_info)
-                }
-                Ok(StatusUpdate::Success { dev_info }) => {
-                    log::info!("STATUS: success using device: {}", dev_info);
-                }
-                Err(RecvError) => {
-                    log::debug!("STATUS: end");
-                    return;
-                }
-            }
-        });
-
-        let callback = StateCallback::new(Box::new(move |rv| {
-            register_tx.send(rv).unwrap();
-        }));
-
-        manager.sign(
-            flags,
-            timeout_ms,
-            chal_bytes,
-            vec![app_bytes],
-            allowed_credentials,
-            status_tx.clone(),
-            callback,
-        );
-
-        let register_result = register_rx.recv().map_err(|e| {
-            log::error!("Registration Channel Error -> {:?}", e);
-            WebauthnCError::Internal
-        })?;
-
-        let (appid, key_handle, sign_data, device_info) = register_result.map_err(|e| {
-            log::error!("Device Registration Error -> {:?}", e);
-            WebauthnCError::Internal
-        })?;
-
-        log::debug!("di ->  {:?}", device_info);
-
-        let (_, (user_present, counter, signature)) =
-            u2sd_sign_data_parser(sign_data.as_slice())
-                .map_err(|_| WebauthnCError::ParseNOMFailure)?;
-
-        Ok(U2FSignData {
-            appid,
-            key_handle,
-            counter,
-            signature,
-            user_present,
-        })
-    }
-
     /// https://www.w3.org/TR/webauthn/#getAssertion
     pub fn do_authentication(
         &self,
@@ -775,7 +501,7 @@ impl WebauthnAuthenticator {
         let collected_client_data = CollectedClientData {
             type_: "webauthn.get".to_string(),
             challenge: options.challenge.clone(),
-            origin: caller_origin.as_str().trim_right_matches("/").to_string(),
+            origin: caller_origin.as_str().trim_end_matches("/").to_string(),
             token_binding: None,
         };
 
@@ -795,23 +521,11 @@ impl WebauthnAuthenticator {
 
         let rp_id_hash = compute_sha256(options.rp_id.as_bytes());
 
-        let allowed_credentials: Vec<KeyHandle> = options
-            .allow_credentials
-            .iter()
-            .map(|ac| {
-                KeyHandle {
-                    // Dup the inner id.
-                    credential: ac.id.0.clone(),
-                    transports: AuthenticatorTransports::empty(),
-                }
-            })
-            .collect();
-
-        let u2sd = self.perform_u2f_sign(
+        let u2sd = self.token.perform_u2f_sign(
             rp_id_hash.clone(),
             client_data_json_hash,
             timeout.into(),
-            allowed_credentials,
+            options.allow_credentials.as_slice(),
             user_verification,
         )?;
 
@@ -849,7 +563,8 @@ impl WebauthnAuthenticator {
 #[cfg(test)]
 mod tests {
     use crate::WebauthnAuthenticator;
-    use webauthn_rs::base64_data::Base64UrlSafeData;
+    use crate::u2fhid::U2FHid;
+    // use webauthn_rs::base64_data::Base64UrlSafeData;
     use webauthn_rs::ephemeral::WebauthnEphemeralConfig;
     use webauthn_rs::proto::*;
     use webauthn_rs::Webauthn;
@@ -925,7 +640,7 @@ mod tests {
 
         println!("🍿 challenge -> {:?}", chal);
 
-        let wa = WebauthnAuthenticator::new();
+        let wa = WebauthnAuthenticator::new(U2FHid::new());
         let r = wa
             .do_registration("https://localhost:8080", chal)
             .map_err(|e| {
