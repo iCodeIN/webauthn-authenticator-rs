@@ -130,7 +130,7 @@ where
 
         // Let effectiveDomain be the callerOrigin’s effective domain. If effective domain is not a valid domain, then return a DOMException whose name is "Security" and terminate this algorithm.
         let caller_origin = Url::parse(origin).map_err(|pe| {
-            log::error!("url parse failure -> {:?}", pe);
+            log::error!("url parse failure -> {:x?}", pe);
             WebauthnCError::Security
         })?;
 
@@ -145,8 +145,8 @@ where
                 e
             })?;
 
-        log::debug!("effective domain -> {:?}", effective_domain);
-        log::debug!("relying party id -> {:?}", options.rp.id);
+        log::debug!("effective domain -> {:x?}", effective_domain);
+        log::debug!("relying party id -> {:x?}", options.rp.id);
 
         // If options.rp.id
         //      Is present
@@ -184,7 +184,7 @@ where
             })
             .collect();
 
-        log::debug!("Found -> {:?}", cred_types_and_pub_key_algs);
+        log::debug!("Found -> {:x?}", cred_types_and_pub_key_algs);
 
         // If credTypesAndPubKeyAlgs is empty and options.pubKeyCredParams is not empty, return a DOMException whose name is "NotSupportedError", and terminate this algorithm.
         if cred_types_and_pub_key_algs.is_empty() {
@@ -228,8 +228,8 @@ where
         // Let clientDataHash be the hash of the serialized client data represented by clientDataJSON.
         let client_data_json_hash = compute_sha256(client_data_json.as_bytes());
 
-        log::debug!("client_data_json -> {:?}", client_data_json);
-        log::debug!("client_data_json_hash -> {:?}", client_data_json_hash);
+        log::debug!("client_data_json -> {:x?}", client_data_json);
+        log::debug!("client_data_json_hash -> {:x?}", client_data_json_hash);
 
         // Not required.
         // If the options.signal is present and its aborted flag is set to true, return a DOMException whose name is "AbortError" and terminate this algorithm.
@@ -348,12 +348,12 @@ where
 
         let pk_cbor = Value::Map(map);
         let pk_cbor_bytes = serde_cbor::to_vec(&pk_cbor).map_err(|e| {
-            log::error!("PK CBOR -> {:?}", e);
+            log::error!("PK CBOR -> {:x?}", e);
             WebauthnCError::CBOR
         })?;
 
         let key_handle_len: u16 = u16::try_from(u2rd.key_handle.len()).map_err(|e| {
-            log::error!("CBOR kh len is not u16 -> {:?}", e);
+            log::error!("CBOR kh len is not u16 -> {:x?}", e);
             WebauthnCError::CBOR
         })?;
 
@@ -407,7 +407,7 @@ where
         let ao = Value::Map(attest_map);
 
         let ao_bytes = serde_cbor::to_vec(&ao).map_err(|e| {
-            log::error!("AO CBOR -> {:?}", e);
+            log::error!("AO CBOR -> {:x?}", e);
             WebauthnCError::CBOR
         })?;
 
@@ -425,7 +425,7 @@ where
             type_: "public-key".to_string(),
         };
 
-        log::debug!("rego  -> {:?}", rego);
+        log::debug!("rego  -> {:x?}", rego);
         Ok(rego)
     }
 
@@ -458,7 +458,7 @@ where
 
         // Let effectiveDomain be the callerOrigin’s effective domain. If effective domain is not a valid domain, then return a DOMException whose name is "Security" and terminate this algorithm.
         let caller_origin = Url::parse(origin).map_err(|pe| {
-            log::error!("url parse failure -> {:?}", pe);
+            log::error!("url parse failure -> {:x?}", pe);
             WebauthnCError::Security
         })?;
 
@@ -473,8 +473,8 @@ where
                 e
             })?;
 
-        log::debug!("effective domain -> {:?}", effective_domain);
-        log::debug!("relying party id -> {:?}", options.rp_id);
+        log::debug!("effective domain -> {:x?}", effective_domain);
+        log::debug!("relying party id -> {:x?}", options.rp_id);
 
         // If options.rp.id
         //      Is present
@@ -513,8 +513,8 @@ where
         // Let clientDataHash be the hash of the serialized client data represented by clientDataJSON.
         let client_data_json_hash = compute_sha256(client_data_json.as_bytes());
 
-        log::debug!("client_data_json -> {:?}", client_data_json);
-        log::debug!("client_data_json_hash -> {:?}", client_data_json_hash);
+        log::debug!("client_data_json -> {:x?}", client_data_json);
+        log::debug!("client_data_json_hash -> {:x?}", client_data_json_hash);
 
         // This is where we deviate from the spec, since we aren't a browser.
 
@@ -530,7 +530,7 @@ where
             user_verification,
         )?;
 
-        log::debug!("u2sd -> {:?}", u2sd);
+        log::debug!("u2sd -> {:x?}", u2sd);
         // Transform the result to webauthn
 
         // The flags are set from the device.
@@ -613,7 +613,7 @@ mod tests {
         let wa = WebauthnAuthenticator::new();
         let r = wa.do_registration("https://localhost", chal)
             .map_err(|e| {
-                eprintln!("Error -> {:?}", e);
+                eprintln!("Error -> {:x?}", e);
                 e
             })
             .expect("Failed to register");
@@ -640,37 +640,37 @@ mod tests {
             .generate_challenge_register(&username, Some(UserVerificationPolicy::Discouraged))
             .unwrap();
 
-        println!("🍿 challenge -> {:?}", chal);
+        println!("🍿 challenge -> {:x?}", chal);
 
         let mut wa = WebauthnAuthenticator::new(U2FHid::new());
         let r = wa
             .do_registration("https://localhost:8080", chal)
             .map_err(|e| {
-                eprintln!("Error -> {:?}", e);
+                eprintln!("Error -> {:x?}", e);
                 e
             })
             .expect("Failed to register");
 
         let cred = wan
-            .register_credential(r, reg_state, |_| Ok(false))
+            .register_credential(&r, reg_state, |_| Ok(false))
             .unwrap();
 
         let (chal, auth_state) = wan
-            .generate_challenge_authenticate(vec![cred], Some(UserVerificationPolicy::Discouraged))
+            .generate_challenge_authenticate(vec![cred])
             .unwrap();
 
         let r = wa
             .do_authentication("https://localhost:8080", chal)
             .map_err(|e| {
-                eprintln!("Error -> {:?}", e);
+                eprintln!("Error -> {:x?}", e);
                 e
             })
             .expect("Failed to auth");
 
         let auth_res = wan
-            .authenticate_credential(r, auth_state)
+            .authenticate_credential(&r, auth_state)
             .expect("webauth authentication denied");
-        log::debug!("auth_res -> {:?}", auth_res);
+        log::debug!("auth_res -> {:x?}", auth_res);
     }
 
     #[test]
@@ -692,36 +692,36 @@ mod tests {
             .generate_challenge_register(&username, Some(UserVerificationPolicy::Discouraged))
             .unwrap();
 
-        println!("🍿 challenge -> {:?}", chal);
+        println!("🍿 challenge -> {:x?}", chal);
 
         let mut wa = WebauthnAuthenticator::new(U2FSoft::new());
         let r = wa
             .do_registration("https://localhost:8080", chal)
             .map_err(|e| {
-                eprintln!("Error -> {:?}", e);
+                eprintln!("Error -> {:x?}", e);
                 e
             })
             .expect("Failed to register");
 
         let cred = wan
-            .register_credential(r, reg_state, |_| Ok(false))
+            .register_credential(&r, reg_state, |_| Ok(false))
             .unwrap();
 
         let (chal, auth_state) = wan
-            .generate_challenge_authenticate(vec![cred], Some(UserVerificationPolicy::Discouraged))
+            .generate_challenge_authenticate(vec![cred])
             .unwrap();
 
         let r = wa
             .do_authentication("https://localhost:8080", chal)
             .map_err(|e| {
-                eprintln!("Error -> {:?}", e);
+                eprintln!("Error -> {:x?}", e);
                 e
             })
             .expect("Failed to auth");
 
         let auth_res = wan
-            .authenticate_credential(r, auth_state)
+            .authenticate_credential(&r, auth_state)
             .expect("webauth authentication denied");
-        log::debug!("auth_res -> {:?}", auth_res);
+        log::debug!("auth_res -> {:x?}", auth_res);
     }
 }
