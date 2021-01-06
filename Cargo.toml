@@ -11,17 +11,23 @@ repository = "https://github.com/kanidm/webauthn-authenticator-rs/"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+u2fhid = ["authenticator"]
+default = ["u2fhid"]
+
 [dependencies]
-log = "0.4"
-authenticator = "0.3"
 webauthn-rs = "0.3.0-alpha.1"
 # webauthn-rs = { path = "../webauthn-rs" }
+
+log = "0.4"
 url = { version = "2.1.1" }
 serde_json = "1.0"
 nom = "4.2"
 serde_cbor = "0.11"
 openssl = "0.10"
 
+authenticator = { version = "0.3", optional = true }
+
 [dev-dependencies]
-env_logger = "0.7"
-base64 = "0.12"
+env_logger = "0.8"
+base64 = "0.13"
