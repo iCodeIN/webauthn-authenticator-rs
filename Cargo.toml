@@ -16,8 +16,8 @@ u2fhid = ["authenticator"]
 default = ["u2fhid"]
 
 [dependencies]
-# webauthn-rs = { version = "0.3.0-alpha.5" }
-webauthn-rs = { path = "../webauthn-rs" }
+webauthn-rs = { version = "0.3.0-alpha.5" }
+# webauthn-rs = { path = "../webauthn-rs" }
 
 log = "0.4"
 url = { version = "2.1.1" }
