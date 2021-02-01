@@ -10,7 +10,7 @@ use std::convert::TryFrom;
 use std::iter;
 use url::Url;
 use webauthn_rs::crypto::compute_sha256;
-use webauthn_rs::proto::{
+pub use webauthn_rs::proto::{
     AllowCredentials,
     // AttestationConveyancePreference,
     AuthenticatorAssertionResponseRaw,
