@@ -22,7 +22,7 @@ webauthn-rs = { version = "0.3.0-alpha.5" }
 log = "0.4"
 url = { version = "2.1.1" }
 serde_json = "1.0"
-nom = "4.2"
+nom = "6.1"
 serde_cbor = "0.11"
 openssl = "0.10"
 

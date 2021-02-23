@@ -29,24 +29,24 @@ pub struct U2FHid {}
 fn asn1_seq_extractor(i: &[u8]) -> nom::IResult<&[u8], &[u8]> {
     // Assert we have enough bytes for the ASN.1 header.
     if i.len() < 2 {
-        return Err(nom::Err::Failure(nom::Context::Code(
+        return Err(nom::Err::Failure(nom::error::Error::new(
             i,
-            nom::ErrorKind::Custom(1),
+            nom::error::ErrorKind::LengthValue,
         )));
     }
     if i[0] != 0x30 {
         // It's not an ASN.1 sequence.
-        return Err(nom::Err::Failure(nom::Context::Code(
+        return Err(nom::Err::Failure(nom::error::Error::new(
             i,
-            nom::ErrorKind::Custom(2),
+            nom::error::ErrorKind::IsNot,
         )));
     }
 
     let length: usize = if i[1] & 0x40 == 0x40 {
         // This is a long form length
-        return Err(nom::Err::Failure(nom::Context::Code(
+        return Err(nom::Err::Failure(nom::error::Error::new(
             i,
-            nom::ErrorKind::Custom(3),
+            nom::error::ErrorKind::Tag,
         )));
     } else {
         i[1] as usize
@@ -54,9 +54,9 @@ fn asn1_seq_extractor(i: &[u8]) -> nom::IResult<&[u8], &[u8]> {
 
     if i.len() < (2 + length) {
         // Not enough bytes to satisfy.
-        return Err(nom::Err::Failure(nom::Context::Code(
+        return Err(nom::Err::Failure(nom::error::Error::new(
             i,
-            nom::ErrorKind::Custom(4),
+            nom::error::ErrorKind::TakeUntil,
         )));
     }
 
@@ -73,9 +73,9 @@ named!( u2rd_parser<&[u8], U2FRegistrationData>,
                 take!(32)
             ) >>
             public_key_y: take!(32) >>
-            key_handle: length_data!(nom::be_u8) >>
+            key_handle: length_data!(nom::number::complete::be_u8) >>
             att_cert: call!(asn1_seq_extractor) >>
-            signature: call!(nom::rest) >>
+            signature: call!(nom::combinator::rest) >>
             (U2FRegistrationData {
                 public_key_x: public_key_x.to_vec(),
                 public_key_y: public_key_y.to_vec(),
@@ -117,9 +117,9 @@ impl TryFrom<&[u8]> for U2FRegistrationData {
 
 named!( u2sd_sign_data_parser<&[u8], (u8, u32, Vec<u8>)>,
     do_parse!(
-        up: call!(nom::be_u8) >>
-        cnt: u32!(nom::Endianness::Big) >>
-        sig: call!(nom::rest) >>
+        up: call!(nom::number::complete::be_u8) >>
+        cnt: u32!(nom::number::Endianness::Big) >>
+        sig: call!(nom::combinator::rest) >>
         (
             (up, cnt, sig.to_vec())
         )
@@ -180,10 +180,14 @@ impl U2FToken for U2FHid {
         thread::spawn(move || loop {
             match status_rx.recv() {
                 Ok(StatusUpdate::DeviceAvailable { dev_info }) => {
-                    log::info!("STATUS: device available: {}", dev_info)
+                    log::debug!("STATUS: device available: {}", dev_info);
+                    log::info!(
+                        "Available Device: {}",
+                        std::str::from_utf8(&dev_info.device_name).unwrap_or("invalid device name")
+                    );
                 }
                 Ok(StatusUpdate::DeviceUnavailable { dev_info }) => {
-                    log::error!("STATUS: device unavailable: {}", dev_info)
+                    log::debug!("STATUS: device unavailable: {}", dev_info)
                 }
                 Ok(StatusUpdate::Success { dev_info }) => {
                     log::info!("STATUS: success using device: {}", dev_info);
@@ -279,10 +283,14 @@ impl U2FToken for U2FHid {
         thread::spawn(move || loop {
             match status_rx.recv() {
                 Ok(StatusUpdate::DeviceAvailable { dev_info }) => {
-                    log::info!("STATUS: device available: {}", dev_info)
+                    log::debug!("STATUS: device available: {}", dev_info);
+                    log::info!(
+                        "Available Device: {}",
+                        std::str::from_utf8(&dev_info.device_name).unwrap_or("invalid device name")
+                    );
                 }
                 Ok(StatusUpdate::DeviceUnavailable { dev_info }) => {
-                    log::error!("STATUS: device unavailable: {}", dev_info)
+                    log::debug!("STATUS: device unavailable: {}", dev_info)
                 }
                 Ok(StatusUpdate::Success { dev_info }) => {
                     log::info!("STATUS: success using device: {}", dev_info);
