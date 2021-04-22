@@ -217,7 +217,7 @@ where
         let collected_client_data = CollectedClientData {
             type_: "webauthn.create".to_string(),
             challenge: options.challenge.clone(),
-            origin: caller_origin.as_str().trim_end_matches("/").to_string(),
+            origin: caller_origin.origin().unicode_serialization(),
             token_binding: None,
         };
 
@@ -502,7 +502,7 @@ where
         let collected_client_data = CollectedClientData {
             type_: "webauthn.get".to_string(),
             challenge: options.challenge.clone(),
-            origin: caller_origin.as_str().trim_end_matches("/").to_string(),
+            origin: caller_origin.origin().unicode_serialization(),
             token_binding: None,
         };
 

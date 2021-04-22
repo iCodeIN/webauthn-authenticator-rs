@@ -118,7 +118,12 @@ impl U2FToken for U2FSoft {
             WebauthnCError::OpenSSL
         })?;
 
+        // User Presence is asserted by the token refusing to register
+        // if not present.
         // Let verificationData be the concatenation of (0x00 || rpIdHash || clientDataHash || credentialId || publicKeyU2F) (see Section 4.3 of [FIDO-U2F-Message-Formats])
+        // Let publicKeyU2F be the concatenation 0x04 || x || y.
+        // 0x04 signifies ecc uncompressed.
+
         let r: [u8; 1] = [0x00];
         let s: [u8; 1] = [0x04];
         let verification_data: Vec<u8> = (&r)
