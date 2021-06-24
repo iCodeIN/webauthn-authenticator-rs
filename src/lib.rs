@@ -223,7 +223,7 @@ where
 
         //  Let clientDataJSON be the JSON-serialized client data constructed from collectedClientData.
         let client_data_json =
-            serde_json::to_string(&collected_client_data).map_err(|_| WebauthnCError::JSON)?;
+            serde_json::to_string(&collected_client_data).map_err(|_| WebauthnCError::Json)?;
 
         // Let clientDataHash be the hash of the serialized client data represented by clientDataJSON.
         let client_data_json_hash = compute_sha256(client_data_json.as_bytes());
@@ -312,7 +312,7 @@ where
                         .as_ref()
                         .map(|v| v == &AuthenticatorAttachment::Platform)
                         .unwrap_or(false);
-                    let uv = &auth_sel.user_verification == &UserVerificationPolicy::Required;
+                    let uv = auth_sel.user_verification == UserVerificationPolicy::Required;
                     (pa, auth_sel.require_resident_key, uv)
                 }
                 None => (false, false, false),
@@ -349,12 +349,12 @@ where
         let pk_cbor = Value::Map(map);
         let pk_cbor_bytes = serde_cbor::to_vec(&pk_cbor).map_err(|e| {
             log::error!("PK CBOR -> {:x?}", e);
-            WebauthnCError::CBOR
+            WebauthnCError::Cbor
         })?;
 
         let key_handle_len: u16 = u16::try_from(u2rd.key_handle.len()).map_err(|e| {
             log::error!("CBOR kh len is not u16 -> {:x?}", e);
-            WebauthnCError::CBOR
+            WebauthnCError::Cbor
         })?;
 
         // combine aaGuid, KeyHandle, CborPubKey into a AttestedCredentialData. (acd)
@@ -364,9 +364,9 @@ where
         let acd: Vec<u8> = aaguid
             .iter()
             .chain(key_handle_len.to_be_bytes().iter())
-            .map(|v| *v)
-            .chain(u2rd.key_handle.iter().map(|v| *v))
-            .chain(pk_cbor_bytes.iter().map(|v| *v))
+            .copied()
+            .chain(u2rd.key_handle.iter().copied())
+            .chain(pk_cbor_bytes.iter().copied())
             .collect();
 
         // set counter to 0 during create
@@ -376,7 +376,7 @@ where
 
         let authdata: Vec<u8> = rp_id_hash
             .iter()
-            .map(|v| *v)
+            .copied()
             .chain(iter::once(flags))
             .chain(
                 // A 0 u32 counter
@@ -408,7 +408,7 @@ where
 
         let ao_bytes = serde_cbor::to_vec(&ao).map_err(|e| {
             log::error!("AO CBOR -> {:x?}", e);
-            WebauthnCError::CBOR
+            WebauthnCError::Cbor
         })?;
 
         // Return a DOMException whose name is "NotAllowedError". In order to prevent information leak that could identify the user without consent, this step MUST NOT be executed before lifetimeTimer has expired. See §14.5 Registration Ceremony Privacy for details.
@@ -417,7 +417,7 @@ where
 
         let rego = RegisterPublicKeyCredential {
             id,
-            raw_id: Base64UrlSafeData(u2rd.key_handle.clone()),
+            raw_id: Base64UrlSafeData(u2rd.key_handle),
             response: AuthenticatorAttestationResponseRaw {
                 attestation_object: Base64UrlSafeData(ao_bytes),
                 client_data_json: Base64UrlSafeData(client_data_json.as_bytes().to_vec()),
@@ -508,7 +508,7 @@ where
 
         // Let clientDataJSON be the JSON-serialized client data constructed from collectedClientData.
         let client_data_json =
-            serde_json::to_string(&collected_client_data).map_err(|_| WebauthnCError::JSON)?;
+            serde_json::to_string(&collected_client_data).map_err(|_| WebauthnCError::Json)?;
 
         // Let clientDataHash be the hash of the serialized client data represented by clientDataJSON.
         let client_data_json_hash = compute_sha256(client_data_json.as_bytes());
@@ -518,7 +518,7 @@ where
 
         // This is where we deviate from the spec, since we aren't a browser.
 
-        let user_verification = &options.user_verification == &UserVerificationPolicy::Required;
+        let user_verification = options.user_verification == UserVerificationPolicy::Required;
 
         let rp_id_hash = compute_sha256(options.rp_id.as_bytes());
 
@@ -537,11 +537,11 @@ where
 
         let authdata: Vec<u8> = rp_id_hash
             .iter()
-            .map(|v| *v)
+            .copied()
             .chain(iter::once(u2sd.user_present))
             .chain(
                 // A 0 u32 counter
-                u2sd.counter.to_be_bytes().iter().map(|v| *v),
+                u2sd.counter.to_be_bytes().iter().copied(),
             )
             .collect();
 
@@ -553,7 +553,7 @@ where
             response: AuthenticatorAssertionResponseRaw {
                 authenticator_data: Base64UrlSafeData(authdata),
                 client_data_json: Base64UrlSafeData(client_data_json.as_bytes().to_vec()),
-                signature: Base64UrlSafeData(u2sd.signature.clone()),
+                signature: Base64UrlSafeData(u2sd.signature),
                 user_handle: None,
             },
             type_: "public-key".to_string(),
@@ -570,9 +570,10 @@ mod tests {
     use webauthn_rs::ephemeral::WebauthnEphemeralConfig;
     use webauthn_rs::proto::*;
     use webauthn_rs::Webauthn;
-    pub const CHALLENGE_SIZE_BYTES: usize = 32;
 
     /*
+    pub const CHALLENGE_SIZE_BYTES: usize = 32;
+
     #[test]
     fn webauthn_authenticator_basic_registration() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -632,7 +633,7 @@ mod tests {
             None,
         );
 
-        let mut wan = Webauthn::new(wan_c);
+        let wan = Webauthn::new(wan_c);
 
         let username = "william".to_string();
 
@@ -682,7 +683,7 @@ mod tests {
             None,
         );
 
-        let mut wan = Webauthn::new(wan_c);
+        let wan = Webauthn::new(wan_c);
 
         let username = "william".to_string();
 

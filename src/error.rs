@@ -1,7 +1,7 @@
 #[derive(Debug)]
 pub enum WebauthnCError {
-    JSON,
-    CBOR,
+    Json,
+    Cbor,
     Unknown,
     Security,
     NotSupported,

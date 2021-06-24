@@ -14,6 +14,12 @@ use std::thread;
 
 pub struct U2FHid {}
 
+impl Default for U2FHid {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // The format of the return registration data is as follows:
 //
 // Bytes  Value
@@ -66,10 +72,10 @@ fn asn1_seq_extractor(i: &[u8]) -> nom::IResult<&[u8], &[u8]> {
 
 named!( u2rd_parser<&[u8], U2FRegistrationData>,
     preceded!(
-        verify!(take!(1), |val: &[u8]| val == &[0x05]),
+        verify!(take!(1), |val: &[u8]| val == [0x05]),
         do_parse!(
             public_key_x: preceded!(
-                verify!(take!(1), |val: &[u8]| val == &[0x04]),
+                verify!(take!(1), |val: &[u8]| val == [0x04]),
                 take!(32)
             ) >>
             public_key_y: take!(32) >>
@@ -192,7 +198,7 @@ impl U2FToken for U2FHid {
                 Ok(StatusUpdate::Success { dev_info }) => {
                     log::info!("STATUS: success using device: {}", dev_info);
                 }
-                Err(_RecvError) => {
+                Err(_recverror) => {
                     log::debug!("STATUS: end");
                     return;
                 }
@@ -203,15 +209,20 @@ impl U2FToken for U2FHid {
             register_tx.send(rv).unwrap();
         }));
 
-        manager.register(
-            flags,
-            timeout_ms,
-            chal_bytes,
-            app_bytes,
-            vec![],
-            status_tx.clone(),
-            callback,
-        );
+        manager
+            .register(
+                flags,
+                timeout_ms,
+                chal_bytes,
+                app_bytes,
+                vec![],
+                status_tx,
+                callback,
+            )
+            .map_err(|e| {
+                log::error!("Failed to setup manager register -> {:?}", e);
+                WebauthnCError::Internal
+            })?;
 
         let register_result = register_rx.recv().map_err(|e| {
             log::error!("Registration Channel Error -> {:?}", e);
@@ -295,7 +306,7 @@ impl U2FToken for U2FHid {
                 Ok(StatusUpdate::Success { dev_info }) => {
                     log::info!("STATUS: success using device: {}", dev_info);
                 }
-                Err(RecvError) => {
+                Err(_recverror) => {
                     log::debug!("STATUS: end");
                     return;
                 }
@@ -306,15 +317,20 @@ impl U2FToken for U2FHid {
             register_tx.send(rv).unwrap();
         }));
 
-        manager.sign(
-            flags,
-            timeout_ms,
-            chal_bytes,
-            vec![app_bytes],
-            allowed_credentials,
-            status_tx.clone(),
-            callback,
-        );
+        manager
+            .sign(
+                flags,
+                timeout_ms,
+                chal_bytes,
+                vec![app_bytes],
+                allowed_credentials,
+                status_tx,
+                callback,
+            )
+            .map_err(|e| {
+                log::error!("Failed to setup manager sign -> {:?}", e);
+                WebauthnCError::Internal
+            })?;
 
         let register_result = register_rx.recv().map_err(|e| {
             log::error!("Registration Channel Error -> {:?}", e);
