@@ -20,6 +20,12 @@ impl U2FSoft {
     }
 }
 
+impl Default for U2FSoft {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl U2FToken for U2FSoft {
     fn perform_u2f_register(
         &mut self,
@@ -28,7 +34,7 @@ impl U2FToken for U2FSoft {
         // This is client_data_json_hash
         chal_bytes: Vec<u8>,
         // timeout from options
-        timeout_ms: u64,
+        _timeout_ms: u64,
         //
         platform_attached: bool,
         resident_key: bool,
@@ -142,7 +148,7 @@ impl U2FToken for U2FSoft {
             .chain(s.iter())
             .chain(public_key_x.iter())
             .chain(public_key_y.iter())
-            .map(|b| *b)
+            .copied()
             .collect();
 
         // Do the signature
@@ -176,7 +182,7 @@ impl U2FToken for U2FSoft {
         // This is client_data_json_hash
         chal_bytes: Vec<u8>,
         // timeout from options
-        timeout_ms: u64,
+        _timeout_ms: u64,
         // list of creds
         allowed_credentials: &[AllowCredentials],
         user_verification: bool,
@@ -230,7 +236,7 @@ impl U2FToken for U2FSoft {
             .chain(iter::once(&user_present))
             .chain(counter.to_be_bytes().iter())
             .chain(chal_bytes.iter())
-            .map(|b| *b)
+            .copied()
             .collect();
 
         let signature = signer
