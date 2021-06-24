@@ -93,13 +93,20 @@ impl U2FToken for U2FSoft {
                 WebauthnCError::OpenSSL
             })?;
 
-        let public_key_x = xbn.to_vec();
-        let public_key_y = ybn.to_vec();
+        let mut public_key_x = Vec::with_capacity(32);
+        let mut public_key_y = Vec::with_capacity(32);
 
-        if public_key_x.len() != 32 || public_key_y.len() != 32 {
-            log::error!("OpenSSL BN generated invalid arrays");
-            return Err(WebauthnCError::OpenSSL);
-        }
+        public_key_x.resize(32, 0);
+        public_key_y.resize(32, 0);
+
+        let xbnv = xbn.to_vec();
+        let ybnv = ybn.to_vec();
+
+        let (_pad, x_fill) = public_key_x.split_at_mut(32 - xbnv.len());
+        x_fill.copy_from_slice(&xbnv);
+
+        let (_pad, y_fill) = public_key_y.split_at_mut(32 - ybnv.len());
+        y_fill.copy_from_slice(&ybnv);
 
         // Extract the DER cert for later
         let ecpriv_der = eckey.private_key_to_der().map_err(|e| {
