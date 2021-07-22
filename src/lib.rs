@@ -219,6 +219,8 @@ where
             challenge: options.challenge.clone(),
             origin: caller_origin.origin().unicode_serialization(),
             token_binding: None,
+            cross_origin: None,
+            unknown_keys: BTreeMap::new(),
         };
 
         //  Let clientDataJSON be the JSON-serialized client data constructed from collectedClientData.
@@ -504,6 +506,8 @@ where
             challenge: options.challenge.clone(),
             origin: caller_origin.origin().unicode_serialization(),
             token_binding: None,
+            cross_origin: None,
+            unknown_keys: BTreeMap::new(),
         };
 
         // Let clientDataJSON be the JSON-serialized client data constructed from collectedClientData.
@@ -556,6 +560,7 @@ where
                 signature: Base64UrlSafeData(u2sd.signature),
                 user_handle: None,
             },
+            extensions: None,
             type_: "public-key".to_string(),
         })
     }
@@ -566,9 +571,7 @@ mod tests {
     use crate::softtok::U2FSoft;
     use crate::u2fhid::U2FHid;
     use crate::WebauthnAuthenticator;
-    // use webauthn_rs::base64_data::Base64UrlSafeData;
     use webauthn_rs::ephemeral::WebauthnEphemeralConfig;
-    use webauthn_rs::proto::*;
     use webauthn_rs::Webauthn;
 
     /*
@@ -637,9 +640,7 @@ mod tests {
 
         let username = "william".to_string();
 
-        let (chal, reg_state) = wan
-            .generate_challenge_register(&username, Some(UserVerificationPolicy::Discouraged))
-            .unwrap();
+        let (chal, reg_state) = wan.generate_challenge_register(&username, false).unwrap();
 
         println!("🍿 challenge -> {:x?}", chal);
 
@@ -652,8 +653,8 @@ mod tests {
             })
             .expect("Failed to register");
 
-        let cred = wan
-            .register_credential(&r, reg_state, |_| Ok(false))
+        let (cred, _reg_data) = wan
+            .register_credential(&r, &reg_state, |_| Ok(false))
             .unwrap();
 
         let (chal, auth_state) = wan.generate_challenge_authenticate(vec![cred]).unwrap();
@@ -667,7 +668,7 @@ mod tests {
             .expect("Failed to auth");
 
         let auth_res = wan
-            .authenticate_credential(&r, auth_state)
+            .authenticate_credential(&r, &auth_state)
             .expect("webauth authentication denied");
         log::debug!("auth_res -> {:x?}", auth_res);
     }
@@ -687,9 +688,7 @@ mod tests {
 
         let username = "william".to_string();
 
-        let (chal, reg_state) = wan
-            .generate_challenge_register(&username, Some(UserVerificationPolicy::Discouraged))
-            .unwrap();
+        let (chal, reg_state) = wan.generate_challenge_register(&username, false).unwrap();
 
         println!("🍿 challenge -> {:x?}", chal);
 
@@ -702,8 +701,8 @@ mod tests {
             })
             .expect("Failed to register");
 
-        let cred = wan
-            .register_credential(&r, reg_state, |_| Ok(false))
+        let (cred, _reg_data) = wan
+            .register_credential(&r, &reg_state, |_| Ok(false))
             .unwrap();
 
         let (chal, auth_state) = wan.generate_challenge_authenticate(vec![cred]).unwrap();
@@ -717,7 +716,7 @@ mod tests {
             .expect("Failed to auth");
 
         let auth_res = wan
-            .authenticate_credential(&r, auth_state)
+            .authenticate_credential(&r, &auth_state)
             .expect("webauth authentication denied");
         log::debug!("auth_res -> {:x?}", auth_res);
     }
