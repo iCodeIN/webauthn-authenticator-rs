@@ -217,7 +217,7 @@ where
         let collected_client_data = CollectedClientData {
             type_: "webauthn.create".to_string(),
             challenge: options.challenge.clone(),
-            origin: caller_origin.origin().unicode_serialization(),
+            origin: caller_origin,
             token_binding: None,
             cross_origin: None,
             unknown_keys: BTreeMap::new(),
@@ -504,7 +504,7 @@ where
         let collected_client_data = CollectedClientData {
             type_: "webauthn.get".to_string(),
             challenge: options.challenge.clone(),
-            origin: caller_origin.origin().unicode_serialization(),
+            origin: caller_origin,
             token_binding: None,
             cross_origin: None,
             unknown_keys: BTreeMap::new(),
